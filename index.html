@@ -1,0 +1,124 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>UNO Rooms</title>
+<style>
+:root{--bg:#f4f1ea;--fg:#1b1b1b;--card:#fff;--mut:#777;--R:#d9342b;--G:#2e9d4f;--B:#2467c9;--Y:#e8b923;--W:#222;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15161a;--fg:#eee;--card:#25262c;--mut:#999}}
+:root[data-theme="dark"]{--bg:#15161a;--fg:#eee;--card:#25262c;--mut:#999}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Roboto,sans-serif}
+#app{max-width:480px;margin:0 auto;padding:14px}
+h1{margin:6px 0 14px;font-size:28px}
+input,button{font:inherit;border-radius:10px;border:1px solid #8885;padding:12px;background:var(--card);color:var(--fg);width:100%;box-sizing:border-box;margin:5px 0}
+button{background:#d9342b;color:#fff;border:0;font-weight:700}button.alt{background:#2467c9}button.sm{width:auto;padding:6px 10px;margin:0}
+button:disabled{opacity:.4}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.p{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:10px;background:var(--card);margin:5px 0}
+.p.t{outline:3px solid var(--Y)}
+.code{font-size:40px;letter-spacing:8px;text-align:center;font-weight:800}
+.mut{color:var(--mut);font-size:14px}
+.pile{display:flex;justify-content:center;gap:18px;margin:14px 0;align-items:center}
+.cd{width:58px;height:86px;border-radius:9px;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:24px;border:3px solid #fff;box-shadow:0 2px 6px #0004;flex:none;cursor:pointer}
+.cd.big{width:76px;height:112px;font-size:32px;cursor:default}
+.cd.dim{opacity:.35}
+.R{background:var(--R)}.G{background:var(--G)}.B{background:var(--B)}.Y{background:var(--Y);color:#222}.W{background:var(--W)}
+.back{background:#222;font-size:16px;cursor:pointer}
+#hand{display:flex;gap:6px;overflow-x:auto;padding:10px 2px}
+.dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+.err{color:#d9342b;min-height:20px}
+</style></head><body><div id="app"><h1>🃏 UNO Rooms</h1><div id="v"></div></div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+// ===== PASTE YOUR FIREBASE CONFIG HERE (Project settings > Your apps > Web app) =====
+const firebaseConfig={
+  apiKey:"AIzaSyBqqMVuD0mEB2mg9ZUzd6_r6oICUCLyCwY",
+  authDomain:"uno-friends-6be02.firebaseapp.com",
+  databaseURL:"https://uno-friends-6be02-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId:"uno-friends-6be02",
+  storageBucket:"uno-friends-6be02.firebasestorage.app",
+  messagingSenderId:"151878033894",
+  appId:"1:151878033894:web:e20d5d082b2e28ff563627"
+};
+// ====================================================================================
+const $=s=>document.querySelector(s),V=$('#v');
+const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const COL=['R','G','B','Y'],LBL={S:'⊘',R:'⇄',D:'+2',W:'W',F:'+4'},CN={R:'Red',G:'Green',B:'Blue',Y:'Yellow'};
+let db,ref,me,name='',code='',S=null,unsub=null,pick=null,err='',joining=false;
+try{name=localStorage.getItem('uno-name')||''}catch(e){}
+try{me=localStorage.getItem('uno-id');if(!me){me='p'+Math.random().toString(36).slice(2,10);localStorage.setItem('uno-id',me)}}catch(e){me='p'+Math.random().toString(36).slice(2,10)}
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a}
+function mkDeck(){const d=[];COL.forEach(c=>{d.push({c,v:'0'});for(let n=1;n<=9;n++)d.push({c,v:''+n},{c,v:''+n});['S','R','D'].forEach(v=>d.push({c,v},{c,v}))});for(let i=0;i<4;i++)d.push({c:'W',v:'W'},{c:'W',v:'F'});return shuffle(d)}
+const save=()=>ref.set({s:JSON.stringify(S)}).catch(e=>{err='Save failed: '+e.message;render()});
+function draw(pid,n){const h=S.hands[pid];for(let i=0;i<n;i++){if(!S.deck.length){const top=S.discard.pop();S.deck=shuffle(S.discard);S.discard=[top]}if(!S.deck.length)break;h.push(S.deck.pop())}}
+const adv=k=>{const n=S.players.length;return((S.turn+S.dir*k)%n+n)%n};
+const mine=()=>S&&S.players[S.turn].id===me&&!S.winner;
+function fresh(){return{host:me,players:[{id:me,name}],started:false,deck:[],discard:[],hands:{},turn:0,dir:1,color:'R',uno:{},winner:null,log:''}}
+function init(){
+  if(firebaseConfig.apiKey==='YOUR_API_KEY'){V.innerHTML='<p>Add your Firebase config at the top of index.html, then redeploy.</p>';return}
+  firebase.initializeApp(firebaseConfig);db=firebase.database();render()
+}
+async function create(){name=$('#nm').value.trim();if(!name){err='Enter your name';return render()}
+  save_name();
+  for(let t=0;t<8;t++){
+    code=Array.from({length:4},()=>'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.random()*24|0]).join('');
+    ref=db.ref('rooms/'+code);S=fresh();
+    try{const r=await ref.transaction(cur=>cur?undefined:{s:JSON.stringify(S)});if(r.committed)return listen()}
+    catch(e){err='Could not create room: '+e.message;return render()}
+  }
+  err='Could not find a free room code, try again';render()}
+async function join(){name=$('#nm').value.trim();code=$('#cd').value.trim().toUpperCase();
+  if(!name||code.length!=4){err='Enter your name and a 4-letter code';return render()}
+  save_name();ref=db.ref('rooms/'+code);
+  try{const sn=await ref.get();if(!sn.exists()){err='Room not found';return render()}
+    const st=JSON.parse(sn.val().s);
+    if(!st.players.some(p=>p.id===me)){if(st.started){err='That game already started';return render()}if(st.players.length>=6){err='Room is full (6 max)';return render()}}
+    listen()}catch(e){err=e.message;render()}}
+function save_name(){try{localStorage.setItem('uno-name',name)}catch(e){}}
+function joinRoom(){joining=true;
+  ref.transaction(cur=>{if(!cur)return;const st=JSON.parse(cur.s);
+    if(st.started||st.players.length>=6||st.players.some(p=>p.id===me))return;
+    st.players.push({id:me,name});return{s:JSON.stringify(st)}})
+  .catch(e=>{err=e.message;render()}).finally(()=>joining=false)}
+function listen(){err='';if(unsub)unsub();
+  const h=ref.on('value',sn=>{if(!sn.exists())return;S=JSON.parse(sn.val().s);
+    if(!S.started&&!S.players.some(p=>p.id===me)&&S.players.length<6&&!joining)joinRoom();
+    render()},e=>{err=e.message;render()});
+  unsub=()=>ref.off('value',h)}
+function start(){if(S.host!==me||S.players.length<2)return;
+  S.deck=mkDeck();S.hands={};S.players.forEach(p=>{S.hands[p.id]=[];draw(p.id,7)});
+  let c;while((c=S.deck.pop()).c==='W'||isNaN(c.v))S.deck.unshift(c);
+  S.discard=[c];S.color=c.c;S.turn=0;S.dir=1;S.uno={};S.winner=null;S.started=true;S.log='Game started';save()}
+function play(i,chosen){if(!mine())return;const h=S.hands[me],c=h[i],top=S.discard.at(-1);
+  if(!(c.c==='W'||c.c===S.color||c.v===top.v))return;
+  if(c.c==='W'&&!chosen){pick=i;return render()}
+  pick=null;h.splice(i,1);S.discard.push(c);S.color=c.c==='W'?chosen:c.c;
+  if(h.length>1)S.uno[me]=false;
+  S.log=name+' played '+(c.c==='W'?'Wild '+(LBL[c.v]):CN[c.c]+' '+(LBL[c.v]||c.v));
+  if(!h.length){S.winner=me;S.log=name+' wins! 🎉';return save()}
+  let step=1;
+  if(c.v==='R'){if(S.players.length==2)step=2;else S.dir*=-1}
+  if(c.v==='S')step=2;
+  if(c.v==='D'||c.v==='F'){const v=S.players[adv(1)];draw(v.id,c.v==='D'?2:4);step=2;S.log+=' — '+v.name+' draws '+(c.v==='D'?2:4)}
+  S.turn=adv(step);save()}
+function drawOne(){if(!mine())return;draw(me,1);S.log=name+' drew a card';S.turn=adv(1);save()}
+function callUno(){S.uno[me]=true;S.log=name+' says UNO!';save()}
+function catchP(id){const p=S.players.find(x=>x.id===id);if(S.hands[id].length!=1||S.uno[id])return;draw(id,2);S.uno[id]=true;S.log=name+' caught '+p.name+'! +2 cards';save()}
+function again(){S.started=false;S.winner=null;S.log='';save()}
+function leave(){if(unsub)unsub();unsub=null;S=null;ref=null;render()}
+const card=(c,cls='',attr='')=>`<div class="cd ${c.c} ${cls}" ${attr}>${LBL[c.v]||c.v}</div>`;
+function render(){
+  if(!db)return;
+  if(!S){V.innerHTML=`<input id="nm" placeholder="Your name" maxlength="14" value="${esc(name)}"><button onclick="create()">Create private room</button><p class="mut" style="text-align:center">— or join friends —</p><input id="cd" placeholder="Room code" maxlength="4" style="text-transform:uppercase;text-align:center;letter-spacing:6px"><button class="alt" onclick="join()">Join room</button><div class="err">${esc(err)}</div>`;return}
+  const names=S.players.map(p=>p.name);
+  if(!S.started){V.innerHTML=`<p class="mut" style="text-align:center">Room code — share it with friends</p><div class="code">${esc(code)}</div>`+S.players.map(p=>`<div class="p"><span>${esc(p.name)}${p.id===S.host?' 👑':''}${p.id===me?' (you)':''}</span></div>`).join('')+`<p class="mut">${S.players.length}/6 players</p>`+(S.host===me?`<button ${S.players.length<2?'disabled':''} onclick="start()">Start game</button>`:'<p class="mut" style="text-align:center">Waiting for host to start…</p>')+`<button class="alt" onclick="leave()">Leave</button><div class="err">${esc(err)}</div>`;return}
+  const top=S.discard.at(-1),h=S.hands[me]||[],t=S.players[S.turn];
+  const ok=c=>mine()&&(c.c==='W'||c.c===S.color||c.v===top.v);
+  let x=S.players.filter(p=>p.id!==me).map(p=>{const n=S.hands[p.id].length;return`<div class="p ${t.id===p.id&&!S.winner?'t':''}"><span>${esc(p.name)}</span><span>${n} card${n==1?'':'s'}${n==1&&!S.uno[p.id]?` <button class="sm" onclick="catchP('${esc(p.id)}')">Catch!</button>`:''}${n==1&&S.uno[p.id]?' 🔔':''}</span></div>`}).join('');
+  x+=`<div class="pile"><div class="cd big back" onclick="drawOne()">UNO</div>${card(top,'big')}<div><span class="dot ${S.color}"></span><div class="mut">${CN[S.color]}</div></div></div><p class="mut" style="text-align:center">${esc(S.log)}</p>`;
+  if(S.winner){const w=S.players.find(p=>p.id===S.winner);x+=`<h2 style="text-align:center">🏆 ${esc(w.name)} wins!</h2>`+(S.host===me?'<button onclick="again()">Back to lobby</button>':'')}
+  else x+=`<p style="text-align:center;font-weight:700">${mine()?'Your turn':esc(t.name)+"'s turn"}</p>`;
+  if(pick!==null)x+=`<p style="text-align:center">Choose a color</p><div class="row">${COL.map(c=>`<button style="background:var(--${c})" onclick="play(${pick},'${c}')">${CN[c]}</button>`).join('')}</div>`;
+  x+=`<div id="hand">${h.map((c,i)=>card(c,ok(c)?'':'dim',`onclick="play(${i})"`)).join('')}</div>`;
+  if(mine()&&h.length<=2&&!S.uno[me])x+='<button class="alt" onclick="callUno()">UNO!</button>';
+  x+=`<button class="alt" onclick="leave()" style="opacity:.6">Leave</button>`;
+  V.innerHTML=x}
+init();
+</script></body></html>
